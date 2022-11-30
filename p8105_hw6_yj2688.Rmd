@@ -1,0 +1,92 @@
+---
+title: "p8105_hw6_yj2688"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(p8105.datasets)
+library(readxl)
+library(patchwork)
+library(ggplot2)
+library(viridis)
+library(modelr)
+library(mgcv)
+library(leaps)
+set.seed(1)
+
+```
+
+
+## Problem 1
+
+```{r, warning=FALSE, message=FALSE}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+
+bootstrap = weather_df %>% 
+  bootstrap(n = 5000, id = "strap_n") %>% 
+  mutate(strap = map(strap, as_tibble), 
+         models = map(strap, ~lm(tmax ~ tmin, data = .x)),
+         estimates = map(models, broom::tidy),
+         summary = map(models, broom::glance)) %>% 
+  select(-strap, -models) %>% 
+  unnest(c(estimates, summary), names_repair = "universal") 
+
+bootstrap = bootstrap %>%
+  select(strap_n, term, estimate, r.squared) %>% 
+  pivot_wider(id_cols = c(strap_n, r.squared),
+              names_from = term,
+              values_from = estimate) %>% 
+  rename(beta0 = `(Intercept)`,
+         beta1 = "tmin") %>% 
+  mutate(logb0_b1 = log(beta0 * beta1)) %>% 
+  select(-beta0, -beta1)
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+r2 = bootstrap %>% 
+  select(r.squared) %>% 
+  summarize(lowwerbound = quantile(r.squared, 0.025), upperbound = quantile(r.squared, 0.975))
+
+r2 %>%
+  knitr::kable(digits = 3)
+
+log = bootstrap %>% 
+  select(logb0_b1) %>% 
+  summarize(lowwerboundi = quantile(logb0_b1, 0.025), upperbound = quantile(logb0_b1, 0.975))
+
+log %>%
+  knitr::kable(digits = 3)
+
+bootstrap %>% 
+  select(r.squared) %>% 
+  ggplot(aes(x = r.squared)) + 
+  geom_density() + 
+  labs(x = "Estimated R^2",
+       y = "Density",
+    title = "Estimated R^2 Distribution (bootstrap 5000)")
+
+bootstrap %>% 
+  select(logb0_b1) %>% 
+  ggplot(aes(x = logb0_b1)) + 
+  geom_density() + 
+  labs(x = "Estimated log(beta0*beta1)",
+       y = "Density",
+    title = "Estimated log(beta0*beta1) Distribution (bootstrap 5000)")
+
+
+```
+Both the R^2 and log(beta0*beta1) seems to be normally distributed on the graph. 
