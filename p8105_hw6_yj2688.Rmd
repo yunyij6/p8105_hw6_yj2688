@@ -100,24 +100,18 @@ rawhomicide <- read_csv(url(csvurl), show_col_types = FALSE)
 
 homicide <- rawhomicide %>% 
   mutate(city_state = str_c(city,", ",state),
-         status = case_when(
-           disposition == "Closed by arrest" ~ "solved",
-           disposition == "Closed without arrest" ~ "unsolved",
-           disposition == "Open/No arrest" ~ "unsolved"
-         )) %>%
+         status = as.numeric(disposition == "Closed by arrest")) %>% 
   filter(!city_state %in% c('Dallas, TX','Phoenix, AZ','Kansas City, MO','Tulsa, AL')) %>%
-  filter(victim_race %in% c('White','Black')) %>% 
+  mutate(victim_race = fct_relevel(ifelse(victim_race == "White", "white", "non-white"), "white")) %>%
   mutate_at(c('victim_age'), as.numeric)
+
 ```
+
 
 ```{r, warning=FALSE, message=FALSE}
 #use the glm function to fit a logistic regression for Baltimore with resolved vs unresolved as the outcome and victim age, sex and race as predictors
 baltimore = homicide %>%
-   filter(city_state %in% c('Baltimore, MD')) %>%
-  mutate(status = case_when(
-           status == 'unsolved' ~ 0,
-           status == 'solved' ~ 1)) %>%
-  select(uid, victim_age, victim_race, victim_sex, city_state, status) 
+   filter(city_state %in% c('Baltimore, MD'))
 
 fit_logistic = 
   baltimore %>% 
@@ -126,9 +120,49 @@ fit_logistic =
 fit_logistic %>% 
   broom::tidy() %>% 
   mutate(OR = exp(estimate)) %>%
-  select(term, log_OR = estimate, OR, p.value) %>% 
+  mutate(low_CI = exp(estimate - std.error * 1.96)) %>% 
+  mutate(high_CI = exp(estimate + std.error * 1.96)) %>%
+  select(term, log_OR = estimate, OR, p.value, low_CI, high_CI) %>% 
   knitr::kable(digits = 3)
 
 save(fit_logistic, file = "./baltimore_glm.RData")
+```
+
+The odds ratio of murder in male is 0.412 times lower than female, 95% CI: [0.315, 0.537]. 
+
+
+```{r, warning=FALSE, message=FALSE}
+#use the glm function to every city
+homicide_nest = homicide %>% 
+  group_by(city_state) %>% 
+  nest() %>% 
+    mutate(logit = map(data, ~glm(status ~ victim_sex + victim_race + victim_age, 
+                                      family = binomial, data = .x)), 
+         logit = map(logit, broom::tidy)) %>% 
+  select(-data) %>% 
+  unnest() 
+
+model = homicide_nest %>% 
+  mutate(OR = exp(estimate), 
+         low_CI = exp(estimate - 1.96*std.error), 
+         high_CI = exp(estimate + 1.96*std.error)) %>% 
+  filter(term == "victim_sexMale") %>% 
+  select(OR, low_CI, high_CI)
+
+model %>% knitr::kable(digits = 3)
+
+model %>% 
+  ggplot(aes(x = city_state, y = OR)) + 
+  geom_point(alpha = 0.50) +
+  geom_errorbar(mapping = aes(ymin = low_CI, ymax = high_CI)) +
+  theme_bw() +
+  theme(legend.position = "none",
+        legend.direction = "horizontal",
+         legend.key.size = unit(0.04, "cm"))+
+  coord_flip() + 
+      labs(title = "Homicide Odds Ratio of sex by City", 
+        x = "City State",
+        y = "Sex Odds Ratio") 
+
 ```
 
